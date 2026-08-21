@@ -4,10 +4,13 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D14-green.svg)](https://nodejs.org/)
 [![Express](https://img.shields.io/badge/Express-4.x-blue.svg)](https://expressjs.com/)
 [![WebSocket](https://img.shields.io/badge/WebSocket-ws-8A2BE2.svg)](https://github.com/websockets/ws)
+[![AI Assisted](https://img.shields.io/badge/AI%20Assisted-%F0%9F%A4%96-ff6b6b.svg)](.)
 
 > 模拟真实白墙的校园留言墙，留言以方框卡片形式"悬挂"在白色背景墙上，卡片可拖拽移动，支持多人实时协同。
 
 **仓库地址**：https://github.com/songgms/campus-wall
+
+> 🤖 **声明**：本项目由 AI 辅助开发，代码经过人工审核与调整。
 
 ## 快速启动
 
