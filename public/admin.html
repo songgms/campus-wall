@@ -109,6 +109,42 @@
           <textarea id="cfgSensitiveWords" rows="4" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;resize:vertical" placeholder="每行一个敏感词，例如：&#10;傻逼&#10;操你"></textarea>
         </div>
 
+        <hr style="border:none;border-top:1px solid var(--border);margin:18px 0">
+
+        <h3 style="font-size:15px;margin-bottom:14px;color:var(--text-main)">数据保存设置</h3>
+
+        <div class="switch-row" style="margin-bottom:6px">
+          <span>保存模式：</span>
+        </div>
+        <div class="cfg-styles" style="margin-bottom:14px">
+          <label><input type="radio" name="cfgSaveMode" value="auto"> 自动保存</label>
+          <label><input type="radio" name="cfgSaveMode" value="manual"> 手动保存</label>
+        </div>
+
+        <div class="cfg-num">
+          <span>自动保存间隔：</span>
+          <input id="cfgAutoSaveInterval" type="number" min="5" max="3600" style="width:100px">
+          <span>秒（5-3600，仅自动保存模式生效）</span>
+        </div>
+
+        <div class="cfg-num">
+          <span>备份数量上限：</span>
+          <input id="cfgBackupLimit" type="number" min="1" max="100" style="width:100px">
+          <span>份（1-100，超出自动删除最旧备份）</span>
+        </div>
+
+        <div class="save-status-box" id="saveStatusBox">
+          <div class="save-status-row">
+            <span class="save-status-label">保存状态：</span>
+            <span class="save-status-value" id="saveStatusText">加载中...</span>
+          </div>
+          <div class="save-status-row">
+            <span class="save-status-label">上次保存：</span>
+            <span class="save-status-value" id="saveLastTime">-</span>
+          </div>
+          <button id="manualSaveBtn" class="btn btn-sm btn-primary">立即保存</button>
+        </div>
+
         <button id="saveCfgBtn" class="btn btn-primary">保存设置</button>
       </div>
 

@@ -65,6 +65,10 @@ npm stop
 | 系统设置 | 匿名开关、可选样式、字数上限、敏感词过滤 |
 | 敏感词管理 | 自定义敏感词列表，每行一个，可开关过滤 |
 | 数据导出 | 一键导出全部留言为 JSON 文件 |
+| 保存模式 | 支持自动保存和手动保存两种模式 |
+| 自动保存间隔 | 可配置自动保存时间间隔（5-3600秒） |
+| 备份数量上限 | 可配置备份文件保留数量（1-100份） |
+| 手动保存 | 手动触发数据写入磁盘，实时显示保存状态 |
 | 管理员账号 | 可修改管理员账号和密码 |
 
 ## 技术栈
@@ -239,6 +243,8 @@ certbot --nginx -d your-domain.com
 | PUT | /api/admin/config | 更新配置 |
 | GET | /api/admin/stats | 获取统计数据 |
 | GET | /api/admin/export | 导出留言数据 |
+| GET | /api/admin/save-status | 获取保存状态（模式/是否有未保存变更/上次保存时间） |
+| POST | /api/admin/save | 手动保存数据到磁盘 |
 
 ## WebSocket 事件
 
@@ -254,6 +260,7 @@ certbot --nginx -d your-domain.com
 | reset | 全部卡片位置被重置 |
 | config | 配置变更 |
 | online | 在线人数变更 |
+| save-status | 保存状态变更（自动保存/手动保存后触发，管理端使用） |
 
 客户端可发送：
 
@@ -287,7 +294,10 @@ certbot --nginx -d your-domain.com
     "adminUser": "admin",
     "adminPass": "admin123",
     "sensitiveWords": ["敏感词列表"],
-    "enableSensitiveFilter": true
+    "enableSensitiveFilter": true,
+    "saveMode": "auto",
+    "autoSaveInterval": 30,
+    "backupLimit": 5
   }
 }
 ```
@@ -358,10 +368,48 @@ localtunnel 默认支持 WebSocket。如果使用其他穿透工具，请确认�
 
 登录管理后台 → 系统设置 → 修改管理员账号，填写新密码后保存。也可以直接编辑 `data.json` 中的 `config.adminPass` 字段，重启服务生效。
 
+## 数据保存机制
+
+本项目支持两种数据保存模式，可在管理后台「系统设置 → 数据保存设置」中配置：
+
+### 自动保存模式（默认）
+
+- 数据变更后标记为"待保存"，由定时器按设定间隔自动写入磁盘
+- 间隔可配置：**5-3600 秒**，默认 30 秒
+- 间隔 ≤ 5 秒时，每次变更立即写入磁盘（适合高频操作场景）
+- 服务启动时自动加载定时器，配置变更后自动重启定时器
+
+### 手动保存模式
+
+- 数据变更仅更新内存，不自动写入磁盘
+- 管理员需点击「立即保存」按钮手动触发写入
+- 管理后台实时显示保存状态（是否有未保存变更、上次保存时间）
+- 每 10 秒自动刷新保存状态
+
+> ⚠️ **手动保存模式注意**：未保存到磁盘的变更在服务重启或崩溃后会丢失。进程正常退出（SIGINT/SIGTERM）时会自动保存，但强制杀进程不会。建议定期手动保存，或使用自动保存模式。
+
+### 备份机制
+
+- 每次写入磁盘时自动创建备份文件到 `backups/` 目录
+- 备份数量上限可配置：**1-100 份**，默认 5 份
+- 超出上限时自动删除最旧的备份
+- 备份文件名格式：`data-YYYY-MM-DDTHH-mm-ss-sssZ.json`
+
+### 保存状态接口
+
+```bash
+# 查看保存状态
+curl -H "Authorization: Bearer <token>" http://localhost:3000/api/admin/save-status
+
+# 手动保存
+curl -X POST -H "Authorization: Bearer <token>" http://localhost:3000/api/admin/save
+```
+
 ## 注意事项
 
 - 首次启动会自动创建 `data.json`，默认管理员账号 `admin` / `admin123`，请及时修改
-- 数据文件每次变更会自动备份到 `backups/` 目录，保留最近 5 份
+- 数据文件每次写入磁盘时自动备份到 `backups/` 目录，保留数量可配置（默认 5 份）
+- 手动保存模式下请注意及时保存，避免服务异常导致数据丢失
 - 敏感词过滤默认开启，可在管理端「系统设置」中关闭或自定义词库
 - 生产环境建议使用反向代理（Nginx）并配置 HTTPS，WebSocket 对应使用 wss 协议
 - 本项目仅供学习和校园内部使用，请遵守相关法律法规，不要用于非法用途

@@ -446,6 +446,24 @@ td .raw-author { color: var(--text-sub); }
 .cfg-num { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; font-size: 14px; }
 .cfg-num input { width: 100px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; }
 
+.save-status-box {
+  background: #f9fafb;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.save-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.save-status-label { color: var(--text-sub); }
+.save-status-value { font-weight: 500; }
+.save-status-box #manualSaveBtn { margin-top: 4px; }
+
 .empty-row { text-align: center; color: var(--text-sub); padding: 30px 0 !important; }
 
 /* ===== 响应式：移动端 ===== */

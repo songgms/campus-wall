@@ -225,6 +225,42 @@
 
   $('refreshBtn').addEventListener('click', refreshAll);
 
+  // 保存状态
+  async function refreshSaveStatus() {
+    // 仅在设置页可见时刷新，避免引用不存在的元素
+    if ($('pageSettings').hidden) return;
+    try {
+      const s = await api('/api/admin/save-status');
+      const statusEl = $('saveStatusText');
+      const lastTimeEl = $('saveLastTime');
+      if (s.dirty) {
+        statusEl.textContent = '有未保存的变更';
+        statusEl.style.color = '#d97706';
+      } else {
+        statusEl.textContent = '已保存';
+        statusEl.style.color = '#16a34a';
+      }
+      lastTimeEl.textContent = s.lastSave ? new Date(s.lastSave).toLocaleString('zh-CN') : '尚未保存';
+      $('manualSaveBtn').disabled = !s.dirty;
+    } catch (e) {
+      // 静默失败
+    }
+  }
+
+  $('manualSaveBtn').addEventListener('click', async () => {
+    try {
+      const r = await api('/api/admin/save', { method: 'POST' });
+      if (r.skipped) toast(r.message);
+      else toast('数据已保存到磁盘');
+      refreshSaveStatus();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  // 定时刷新保存状态（每 10 秒）
+  setInterval(refreshSaveStatus, 10000);
+
   // 导出数据
   $('exportBtn').addEventListener('click', () => {
     // 直接打开下载链接（带 token 通过 query 不太安全，改用 fetch + blob）
@@ -270,6 +306,13 @@
       $('cfgMaxLen').value = cfg.maxTextLength;
       $('cfgSensitiveFilter').checked = cfg.enableSensitiveFilter !== false;
       $('cfgSensitiveWords').value = (cfg.sensitiveWords || []).join('\n');
+      // 保存设置
+      document.querySelectorAll('input[name="cfgSaveMode"]').forEach(radio => {
+        radio.checked = radio.value === (cfg.saveMode || 'auto');
+      });
+      $('cfgAutoSaveInterval').value = cfg.autoSaveInterval || 30;
+      $('cfgBackupLimit').value = cfg.backupLimit || 5;
+      refreshSaveStatus();
     } catch (err) {
       toast(err.message, true);
     }
@@ -281,6 +324,7 @@
     if (!allowedStyles.length) return toast('至少保留一种卡片样式', true);
     const sensitiveWords = $('cfgSensitiveWords').value
       .split('\n').map(s => s.trim()).filter(Boolean);
+    const saveMode = document.querySelector('input[name="cfgSaveMode"]:checked')?.value || 'auto';
     try {
       await api('/api/admin/config', {
         method: 'PUT',
@@ -289,10 +333,14 @@
           allowedStyles,
           maxTextLength: $('cfgMaxLen').value,
           enableSensitiveFilter: $('cfgSensitiveFilter').checked,
-          sensitiveWords
+          sensitiveWords,
+          saveMode,
+          autoSaveInterval: $('cfgAutoSaveInterval').value,
+          backupLimit: $('cfgBackupLimit').value
         })
       });
       toast('设置已保存并实时生效');
+      refreshSaveStatus();
     } catch (err) {
       toast(err.message, true);
     }

@@ -19,7 +19,10 @@ const DEFAULT_DATA = {
     adminUser: 'admin',
     adminPass: 'admin123',
     sensitiveWords: ['傻逼', '操你', '草你', '妈的', '他妈', '去死', '垃圾人', '废物'],
-    enableSensitiveFilter: true
+    enableSensitiveFilter: true,
+    saveMode: 'auto',
+    autoSaveInterval: 30,
+    backupLimit: 5
   }
 };
 
@@ -37,21 +40,71 @@ function loadData() {
 
 const db = loadData();
 
-function save() {
+// ---------- 保存机制 ----------
+let dirty = false;          // 是否有未保存的变更
+let lastSaveTime = 0;       // 上次保存时间（0 表示尚未保存过）
+let saveTimer = null;       // 自动保存定时器
+
+// 真正写入磁盘（数据文件 + 备份）
+function writeToDisk() {
+  const backupLimit = db.config.backupLimit || 5;
   fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
-  // 自动备份（保留最近 5 份）
+  // 自动备份
   try {
     const backupDir = path.join(__dirname, 'backups');
     if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     fs.writeFileSync(path.join(backupDir, `data-${stamp}.json`), JSON.stringify(db, null, 2));
     const backups = fs.readdirSync(backupDir).filter(f => f.startsWith('data-') && f.endsWith('.json')).sort();
-    while (backups.length > 5) {
+    while (backups.length > backupLimit) {
       fs.unlinkSync(path.join(backupDir, backups.shift()));
     }
   } catch (e) {
     console.error('[备份失败]', e.message);
   }
+  dirty = false;
+  lastSaveTime = Date.now();
+}
+
+// 数据变更后调用：标记 dirty，由自动保存定时器或手动保存写入磁盘
+function save() {
+  dirty = true;
+  // 自动保存模式下，如果间隔很短（<=5秒）则立即写入，避免频繁操作丢失
+  if (db.config.saveMode === 'auto' && (db.config.autoSaveInterval || 30) <= 5) {
+    writeToDisk();
+  }
+}
+
+// 手动保存（管理员触发）
+function manualSave() {
+  if (!dirty) return { ok: true, skipped: true, message: '没有需要保存的变更' };
+  writeToDisk();
+  return { ok: true, saved: true, lastSave: lastSaveTime };
+}
+
+// 启动/重启自动保存定时器
+function startAutoSave() {
+  if (saveTimer) { clearInterval(saveTimer); saveTimer = null; }
+  if (db.config.saveMode === 'auto') {
+    const interval = Math.max(5, db.config.autoSaveInterval || 30) * 1000;
+    saveTimer = setInterval(() => {
+      if (dirty) {
+        writeToDisk();
+        broadcast({ type: 'save-status', payload: { dirty: false, lastSave: lastSaveTime } });
+      }
+    }, interval);
+  }
+}
+
+// 获取保存状态
+function getSaveStatus() {
+  return {
+    mode: db.config.saveMode,
+    dirty,
+    lastSave: lastSaveTime,
+    autoSaveInterval: db.config.autoSaveInterval || 30,
+    backupLimit: db.config.backupLimit || 5
+  };
 }
 
 // ---------- 工具 ----------
@@ -288,23 +341,67 @@ app.get('/api/admin/config', requireAdmin, (req, res) => {
 });
 
 app.put('/api/admin/config', requireAdmin, (req, res) => {
-  const { allowAnonymous, allowedStyles, maxTextLength, adminUser, adminPass, sensitiveWords, enableSensitiveFilter } = req.body || {};
-  if (allowAnonymous !== undefined) db.config.allowAnonymous = !!allowAnonymous;
-  if (Array.isArray(allowedStyles) && allowedStyles.length) db.config.allowedStyles = allowedStyles;
-  if (maxTextLength !== undefined) {
-    const n = parseInt(maxTextLength, 10);
-    if (!n || n < 1 || n > 2000) return res.status(400).json({ error: '字数上限需在 1-2000 之间' });
-    db.config.maxTextLength = n;
+  const body = req.body || {};
+  const updates = {}; // 收集待应用的修改，全部验证通过后才统一写入
+
+  // —— 无验证的布尔/字符串字段 ——
+  if (body.allowAnonymous !== undefined) updates.allowAnonymous = !!body.allowAnonymous;
+  if (body.enableSensitiveFilter !== undefined) updates.enableSensitiveFilter = !!body.enableSensitiveFilter;
+  if (body.adminUser && body.adminUser.trim()) updates.adminUser = body.adminUser.trim();
+  if (body.adminPass && body.adminPass.trim()) updates.adminPass = body.adminPass.trim();
+
+  // —— 需要验证的字段：任何一个失败都直接 return，不修改任何配置 ——
+  if (body.allowedStyles !== undefined) {
+    if (!Array.isArray(body.allowedStyles) || !body.allowedStyles.length) {
+      return res.status(400).json({ error: '至少保留一种卡片样式' });
+    }
+    updates.allowedStyles = body.allowedStyles;
   }
-  if (adminUser && adminUser.trim()) db.config.adminUser = adminUser.trim();
-  if (adminPass && adminPass.trim()) db.config.adminPass = adminPass.trim();
-  if (enableSensitiveFilter !== undefined) db.config.enableSensitiveFilter = !!enableSensitiveFilter;
-  if (Array.isArray(sensitiveWords)) {
-    db.config.sensitiveWords = sensitiveWords.map(s => String(s).trim()).filter(Boolean);
+
+  if (body.maxTextLength !== undefined) {
+    const n = parseInt(body.maxTextLength, 10);
+    if (!n || n < 1 || n > 2000) {
+      return res.status(400).json({ error: '字数上限需在 1-2000 之间' });
+    }
+    updates.maxTextLength = n;
   }
+
+  if (body.sensitiveWords !== undefined) {
+    if (!Array.isArray(body.sensitiveWords)) {
+      return res.status(400).json({ error: '敏感词列表必须是数组' });
+    }
+    updates.sensitiveWords = body.sensitiveWords.map(s => String(s).trim()).filter(Boolean);
+  }
+
+  if (body.saveMode !== undefined) {
+    if (!['auto', 'manual'].includes(body.saveMode)) {
+      return res.status(400).json({ error: '保存模式只能是 auto 或 manual' });
+    }
+    updates.saveMode = body.saveMode;
+  }
+
+  if (body.autoSaveInterval !== undefined) {
+    const n = parseInt(body.autoSaveInterval, 10);
+    if (!n || n < 5 || n > 3600) {
+      return res.status(400).json({ error: '自动保存间隔需在 5-3600 秒之间' });
+    }
+    updates.autoSaveInterval = n;
+  }
+
+  if (body.backupLimit !== undefined) {
+    const n = parseInt(body.backupLimit, 10);
+    if (!n || n < 1 || n > 100) {
+      return res.status(400).json({ error: '备份数量上限需在 1-100 之间' });
+    }
+    updates.backupLimit = n;
+  }
+
+  // —— 全部验证通过，统一应用修改 ——
+  Object.assign(db.config, updates);
   save();
-  const { allowAnonymous: a, allowedStyles: s, maxTextLength: l } = db.config;
-  broadcast({ type: 'config', payload: { allowAnonymous: a, allowedStyles: s, maxTextLength: l } });
+  startAutoSave(); // 配置变更后重启自动保存定时器
+  const { allowAnonymous, allowedStyles, maxTextLength } = db.config;
+  broadcast({ type: 'config', payload: { allowAnonymous, allowedStyles, maxTextLength } });
   res.json(db.config);
 });
 
@@ -327,6 +424,18 @@ app.get('/api/admin/export', requireAdmin, (req, res) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="campus-wall-export-${Date.now()}.json"`);
   res.send(JSON.stringify(data, null, 2));
+});
+
+// 保存状态
+app.get('/api/admin/save-status', requireAdmin, (req, res) => {
+  res.json(getSaveStatus());
+});
+
+// 手动保存
+app.post('/api/admin/save', requireAdmin, (req, res) => {
+  const result = manualSave();
+  broadcast({ type: 'save-status', payload: { dirty: false, lastSave: lastSaveTime } });
+  res.json(result);
 });
 
 // 统计
@@ -382,7 +491,23 @@ wss.on('connection', ws => {
   });
 });
 
+// 启动自动保存定时器
+startAutoSave();
+
+// 进程退出前保存数据
+function gracefulShutdown() {
+  if (dirty) {
+    console.log('检测到未保存的变更，正在保存...');
+    writeToDisk();
+    console.log('数据已保存');
+  }
+  process.exit(0);
+}
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
+
 server.listen(PORT, () => {
   console.log(`校园留言墙已启动: http://localhost:${PORT}`);
   console.log(`管理端: http://localhost:${PORT}/admin.html  (默认账号 admin / admin123)`);
+  console.log(`保存模式: ${db.config.saveMode === 'auto' ? `自动（每 ${db.config.autoSaveInterval} 秒）` : '手动'}`);
 });
