@@ -1,0 +1,13 @@
+{
+  "name": "campus-wall",
+  "version": "1.0.0",
+  "description": "校园留言墙 - 多人实时协同",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.1"
+  }
+}

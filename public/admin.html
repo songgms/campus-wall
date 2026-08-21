@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>校园留言墙 - 管理后台</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="admin-body">
+
+  <!-- 登录页 -->
+  <div id="loginPage" class="login-wrap">
+    <div class="login-box">
+      <h1>校园留言墙 · 管理后台</h1>
+      <p>仅限管理员访问，请登录</p>
+      <label class="field">
+        <span>账号</span>
+        <input id="loginUser" type="text" autocomplete="username" placeholder="管理员账号">
+      </label>
+      <label class="field">
+        <span>密码</span>
+        <input id="loginPass" type="password" autocomplete="current-password" placeholder="密码">
+      </label>
+      <button id="loginBtn" class="btn btn-primary">登 录</button>
+      <p id="loginErr" class="login-err"></p>
+    </div>
+  </div>
+
+  <!-- 后台主界面 -->
+  <div id="adminPage" class="admin-layout" hidden>
+    <nav class="admin-nav">
+      <span class="brand">🏫 校园留言墙管理后台</span>
+      <a id="navHome" class="active">留言管理</a>
+      <a id="navSettings">系统设置</a>
+      <span class="spacer"></span>
+      <button id="logoutBtn" class="btn btn-sm">退出登录</button>
+    </nav>
+
+    <!-- 首页：统计 + 留言列表 -->
+    <section id="pageHome">
+      <div class="stats-row">
+        <div class="stat-card"><div class="num" id="statTotal">0</div><div class="lbl">留言总数</div></div>
+        <div class="stat-card"><div class="num" id="statToday">0</div><div class="lbl">今日新增</div></div>
+        <div class="stat-card"><div class="num" id="statAnon">0</div><div class="lbl">匿名留言数</div></div>
+        <div class="stat-card"><div class="num" id="statPercent">0%</div><div class="lbl">匿名占比</div></div>
+      </div>
+
+      <div class="panel">
+        <h2>留言列表</h2>
+        <div class="panel-toolbar">
+          <button id="refreshBtn" class="btn btn-sm">刷新</button>
+          <span class="spacer"></span>
+          <button id="resetPosBtn" class="btn btn-sm">重置全部卡片位置</button>
+          <button id="selAllBtn" class="btn btn-sm">全选</button>
+          <button id="batchDelBtn" class="btn btn-sm btn-danger">批量删除选中</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width:36px"></th>
+              <th>留言内容</th>
+              <th style="width:150px">提交时间</th>
+              <th style="width:140px">提交人</th>
+              <th style="width:80px">匿名</th>
+              <th style="width:170px">操作</th>
+            </tr>
+          </thead>
+          <tbody id="msgTable"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 设置页 -->
+    <section id="pageSettings" hidden>
+      <div class="panel">
+        <h2>系统设置</h2>
+
+        <div class="switch-row">
+          <input type="checkbox" id="cfgAnonymous">
+          <span>允许匿名留言（关闭后，用户必须公开姓名）</span>
+        </div>
+
+        <div class="switch-row" style="margin-bottom:6px">
+          <span>可选卡片样式（用户端样式下拉框）</span>
+        </div>
+        <div class="cfg-styles">
+          <label><input type="checkbox" value="plain"> 简约方框</label>
+          <label><input type="checkbox" value="rounded"> 圆角便签</label>
+          <label><input type="checkbox" value="color"> 彩色便签</label>
+        </div>
+
+        <div class="cfg-num">
+          <span>单条留言字数上限：</span>
+          <input id="cfgMaxLen" type="number" min="1" max="2000">
+          <span>字</span>
+        </div>
+
+        <button id="saveCfgBtn" class="btn btn-primary">保存设置</button>
+      </div>
+
+      <div class="panel">
+        <h2>修改管理员账号（可选）</h2>
+        <div class="cfg-num">
+          <span>账号：</span><input id="cfgAdminUser" type="text" style="width:180px" placeholder="留空则不修改">
+        </div>
+        <div class="cfg-num">
+          <span>新密码：</span><input id="cfgAdminPass" type="password" style="width:180px" placeholder="留空则不修改">
+        </div>
+        <button id="saveAdminBtn" class="btn btn-primary">更新管理员</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="js/admin.js"></script>
+</body>
+</html>

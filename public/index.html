@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>校园留言墙</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- 顶栏 -->
+  <header class="topbar">
+    <h1 class="topbar-title">校园留言墙</h1>
+    <div class="topbar-actions">
+      <label class="style-select-label">卡片样式
+        <select id="styleSelect">
+          <option value="plain">简约方框</option>
+          <option value="rounded">圆角便签</option>
+          <option value="color">彩色便签</option>
+        </select>
+      </label>
+      <button id="addBtn" class="btn btn-primary">＋ 新增留言</button>
+    </div>
+  </header>
+
+  <!-- 白色墙面 -->
+  <main id="wall" class="wall">
+    <p id="emptyTip" class="empty-tip" hidden>墙上还没有留言，点击右上角「新增留言」写下第一条吧～</p>
+  </main>
+
+  <!-- 新增/编辑留言弹窗 -->
+  <div id="modal" class="modal-mask" hidden>
+    <div class="modal">
+      <h2 id="modalTitle" class="modal-title">新增留言</h2>
+      <label class="field">
+        <span>留言内容 <em id="charHint" class="char-hint"></em></span>
+        <textarea id="textInput" rows="4" maxlength="200" placeholder="写下你想说的话…"></textarea>
+      </label>
+      <label class="field">
+        <span>昵称 / 姓名</span>
+        <input id="nicknameInput" type="text" maxlength="20" placeholder="不填则匿名">
+      </label>
+      <label class="field field-check">
+        <input id="showNameInput" type="checkbox" checked>
+        <span>公开显示我的姓名</span>
+      </label>
+      <div class="modal-actions">
+        <button id="cancelBtn" class="btn">取消</button>
+        <button id="submitBtn" class="btn btn-primary">发布到墙上</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="js/wall.js"></script>
+</body>
+</html>
