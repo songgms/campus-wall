@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "stop": "node stop.js",
-    "tunnel": "npx localtunnel --port 3000"
+    "tunnel": "node -e \"try { require('child_process').execSync('npx localtunnel --port ' + (process.env.PORT || 3000), {stdio:'inherit'}); } catch(e) { process.exit(e.status || 1); }\"",
+    "tunnel:stop": "node stop-tunnel.js"
   },
   "keywords": [
     "campus",

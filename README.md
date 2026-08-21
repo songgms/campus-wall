@@ -97,8 +97,9 @@ SECRET=your-strong-secret-key npm start
 | 命令 | 说明 |
 |------|------|
 | `npm start` | 启动服务 |
-| `npm stop` | 快速关闭占用 3000 端口的服务进程（跨平台） |
-| `npm run tunnel` | 启动 localtunnel 内网穿透（需先启动服务） |
+| `npm stop` | 快速关闭服务进程（跨平台），默认关闭 `PORT` 环境变量端口占用进程，缺省 3000 |
+| `npm run tunnel` | 启动 localtunnel 内网穿透（需先启动服务），默认连接 `PORT` 环境变量端口，缺省 3000 |
+| `npm run tunnel:stop` | 快速关闭 localtunnel 内网穿透进程（跨平台） |
 
 > `npm stop` 支持指定端口：`node stop.js 3001`，或通过环境变量 `PORT=3001 npm stop`
 
@@ -147,11 +148,14 @@ http://你的局域网IP:3000
 **使用 localtunnel（推荐，免费无需注册）**
 
 ```bash
-# 终端 1：启动服务
+# 终端 1：启动服务（可自定义端口）
 npm start
+# 或指定端口：PORT=8080 npm start
 
-# 终端 2：启动内网穿透
+# 终端 2：启动内网穿透（自动读取 PORT 环境变量，默认 3000）
 npm run tunnel
+# 自定义端口（cmd）：  set PORT=8080 && npm run tunnel
+# 自定义端口（PowerShell）：  $env:PORT=8080; npm run tunnel
 ```
 
 运行后会输出类似：
@@ -161,6 +165,17 @@ your url is: https://random-name-123.loca.lt
 ```
 
 把这个 URL 发给任何人即可访问，WebSocket 实时同步也能正常工作。
+
+> 💡 `npm run tunnel` 会自动与服务端的 `PORT` 环境变量保持一致：若用 `PORT=8080 npm start` 改端口启动，只需同步执行 `PORT=8080 npm run tunnel`（或在 Windows cmd 中 `set PORT=8080`）即可连接正确的端口，无需手动修改命令。
+
+**关闭内网穿透：**
+
+```bash
+# 在另一个终端运行，快速关闭所有 localtunnel 进程
+npm run tunnel:stop
+```
+
+> 也可以直接在运行内网穿透的终端按 `Ctrl + C` 停止。
 
 **其他内网穿透工具对比**
 
@@ -307,7 +322,8 @@ certbot --nginx -d your-domain.com
 ```
 campus-wall/
 ├── server.js          # 后端服务（Express + WebSocket）
-├── stop.js            # 快速关闭端口占用进程的脚本
+├── stop.js            # 快速关闭端口占用进程的脚本（跨平台）
+├── stop-tunnel.js     # 快速关闭 localtunnel 内网穿透进程的脚本（跨平台）
 ├── package.json       # 项目配置
 ├── data.json          # 数据存储（运行时生成）
 ├── backups/           # 自动备份目录（运行时生成，保留最近5份）

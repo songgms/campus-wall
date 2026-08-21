@@ -22,7 +22,9 @@ function killPort(port) {
         // parts: 协议 本地地址 外部地址 状态 PID
         if (parts.length >= 5) {
           const localAddr = parts[1];
-          if (localAddr.endsWith(`:${port}`) || localAddr.includes(`:${port}`)) {
+          // localAddr 格式恒为 IP:PORT（如 0.0.0.0:3000 / [::]:3000 / 127.0.0.1:3000），
+          // 仅用 endsWith 严格匹配最后一个冒号后的端口号，避免子串匹配误伤 :300 命中 :3000
+          if (localAddr.endsWith(`:${port}`)) {
             const pid = parts[parts.length - 1];
             if (/^\d+$/.test(pid)) pids.add(pid);
           }
