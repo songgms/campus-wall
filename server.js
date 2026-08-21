@@ -7,7 +7,7 @@ const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data.json');
-const SECRET = 'campus-wall-secret-key';
+const SECRET = process.env.SECRET || 'campus-wall-secret-key';
 
 // ---------- 数据持久化 ----------
 const DEFAULT_DATA = {
@@ -17,7 +17,9 @@ const DEFAULT_DATA = {
     allowedStyles: ['plain', 'rounded', 'color'],
     maxTextLength: 200,
     adminUser: 'admin',
-    adminPass: 'admin123'
+    adminPass: 'admin123',
+    sensitiveWords: ['傻逼', '操你', '草你', '妈的', '他妈', '去死', '垃圾人', '废物'],
+    enableSensitiveFilter: true
   }
 };
 
@@ -37,12 +39,35 @@ const db = loadData();
 
 function save() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
+  // 自动备份（保留最近 5 份）
+  try {
+    const backupDir = path.join(__dirname, 'backups');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(backupDir, `data-${stamp}.json`), JSON.stringify(db, null, 2));
+    const backups = fs.readdirSync(backupDir).filter(f => f.startsWith('data-') && f.endsWith('.json')).sort();
+    while (backups.length > 5) {
+      fs.unlinkSync(path.join(backupDir, backups.shift()));
+    }
+  } catch (e) {
+    console.error('[备份失败]', e.message);
+  }
 }
 
 // ---------- 工具 ----------
 function genId() {
   return Date.now().toString(36) + crypto.randomBytes(4).toString('hex');
 }
+
+// 敏感词检测：返回命中的敏感词列表，未命中返回空数组
+function findSensitiveWords(text) {
+  if (!db.config.enableSensitiveFilter || !Array.isArray(db.config.sensitiveWords)) return [];
+  const lower = String(text || '').toLowerCase();
+  return db.config.sensitiveWords.filter(w => w && lower.includes(String(w).toLowerCase()));
+}
+
+// 在线人数
+let onlineCount = 0;
 
 function sign(payload) {
   return crypto.createHmac('sha256', SECRET).update(payload).digest('hex');
@@ -77,6 +102,8 @@ function publicMessage(m) {
   const copy = Object.assign({}, m);
   if (copy.blocked) copy.text = '【该内容已被管理员屏蔽】';
   if (!copy.showName) copy.nickname = null;
+  copy.likesCount = Array.isArray(m.likes) ? m.likes.length : 0;
+  delete copy.likes; // 不暴露点赞者ID列表
   return copy;
 }
 
@@ -84,6 +111,12 @@ function publicMessage(m) {
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// 全局错误处理
+app.use((err, req, res, next) => {
+  console.error('[服务器错误]', err);
+  res.status(500).json({ error: '服务器内部错误，请稍后重试' });
+});
 
 // 登录
 app.post('/api/login', (req, res) => {
@@ -114,6 +147,10 @@ app.post('/api/messages', (req, res) => {
   if (text.trim().length > cfg.maxTextLength) {
     return res.status(400).json({ error: `留言不能超过 ${cfg.maxTextLength} 字` });
   }
+  const hits = findSensitiveWords(text);
+  if (hits.length) {
+    return res.status(400).json({ error: `留言包含敏感词：${hits.join('、')}，请修改后再发布` });
+  }
   const validStyles = cfg.allowedStyles.length ? cfg.allowedStyles : ['plain'];
   if (!validStyles.includes(style)) return res.status(400).json({ error: '该卡片样式未被允许' });
   if (!cfg.allowAnonymous && !showName) {
@@ -131,6 +168,7 @@ app.post('/api/messages', (req, res) => {
     nickname: nickname || null,
     showName: !!showName,
     blocked: false,
+    likes: [],
     createdAt: Date.now()
   };
   db.messages.push(msg);
@@ -151,6 +189,10 @@ app.patch('/api/messages/:id', (req, res) => {
     if (!text.trim()) return res.status(400).json({ error: '留言内容不能为空' });
     if (text.trim().length > db.config.maxTextLength) {
       return res.status(400).json({ error: `留言不能超过 ${db.config.maxTextLength} 字` });
+    }
+    const hits = findSensitiveWords(text);
+    if (hits.length) {
+      return res.status(400).json({ error: `留言包含敏感词：${hits.join('、')}，请修改后再保存` });
     }
     msg.text = text.trim();
   }
@@ -173,6 +215,23 @@ app.delete('/api/messages/:id', (req, res) => {
   save();
   broadcast({ type: 'delete', payload: { id: removed.id } });
   res.json({ ok: true });
+});
+
+// 点赞 / 取消点赞（切换）
+app.post('/api/messages/:id/like', (req, res) => {
+  const msg = db.messages.find(m => m.id === req.params.id);
+  if (!msg) return res.status(404).json({ error: '留言不存在' });
+  const { authorId } = req.body || {};
+  if (!authorId) return res.status(400).json({ error: '缺少用户标识' });
+  if (!Array.isArray(msg.likes)) msg.likes = [];
+  const idx = msg.likes.indexOf(authorId);
+  let liked;
+  if (idx >= 0) { msg.likes.splice(idx, 1); liked = false; }
+  else { msg.likes.push(authorId); liked = true; }
+  save();
+  const payload = { id: msg.id, likesCount: msg.likes.length };
+  broadcast({ type: 'like', payload });
+  res.json({ ok: true, liked, likesCount: msg.likes.length });
 });
 
 // ---------- 管理接口 ----------
@@ -229,7 +288,7 @@ app.get('/api/admin/config', requireAdmin, (req, res) => {
 });
 
 app.put('/api/admin/config', requireAdmin, (req, res) => {
-  const { allowAnonymous, allowedStyles, maxTextLength, adminUser, adminPass } = req.body || {};
+  const { allowAnonymous, allowedStyles, maxTextLength, adminUser, adminPass, sensitiveWords, enableSensitiveFilter } = req.body || {};
   if (allowAnonymous !== undefined) db.config.allowAnonymous = !!allowAnonymous;
   if (Array.isArray(allowedStyles) && allowedStyles.length) db.config.allowedStyles = allowedStyles;
   if (maxTextLength !== undefined) {
@@ -239,10 +298,35 @@ app.put('/api/admin/config', requireAdmin, (req, res) => {
   }
   if (adminUser && adminUser.trim()) db.config.adminUser = adminUser.trim();
   if (adminPass && adminPass.trim()) db.config.adminPass = adminPass.trim();
+  if (enableSensitiveFilter !== undefined) db.config.enableSensitiveFilter = !!enableSensitiveFilter;
+  if (Array.isArray(sensitiveWords)) {
+    db.config.sensitiveWords = sensitiveWords.map(s => String(s).trim()).filter(Boolean);
+  }
   save();
   const { allowAnonymous: a, allowedStyles: s, maxTextLength: l } = db.config;
   broadcast({ type: 'config', payload: { allowAnonymous: a, allowedStyles: s, maxTextLength: l } });
   res.json(db.config);
+});
+
+// 导出全部留言数据（JSON）
+app.get('/api/admin/export', requireAdmin, (req, res) => {
+  const data = {
+    exportedAt: new Date().toISOString(),
+    messages: db.messages.map(m => ({
+      id: m.id,
+      text: m.text,
+      style: m.style,
+      nickname: m.nickname,
+      showName: m.showName,
+      blocked: m.blocked,
+      likesCount: Array.isArray(m.likes) ? m.likes.length : 0,
+      createdAt: m.createdAt,
+      createdAtStr: new Date(m.createdAt).toLocaleString('zh-CN')
+    }))
+  };
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="campus-wall-export-${Date.now()}.json"`);
+  res.send(JSON.stringify(data, null, 2));
 });
 
 // 统计
@@ -252,7 +336,9 @@ app.get('/api/admin/stats', requireAdmin, (req, res) => {
   const total = db.messages.length;
   const today = db.messages.filter(m => m.createdAt >= todayStart).length;
   const anonymous = db.messages.filter(m => !m.showName).length;
-  res.json({ total, today, anonymous, percent: total ? Math.round(anonymous / total * 100) : 0 });
+  const blocked = db.messages.filter(m => m.blocked).length;
+  const totalLikes = db.messages.reduce((sum, m) => sum + (Array.isArray(m.likes) ? m.likes.length : 0), 0);
+  res.json({ total, today, anonymous, blocked, totalLikes, percent: total ? Math.round(anonymous / total * 100) : 0 });
 });
 
 // ---------- WebSocket ----------
@@ -266,7 +352,21 @@ function broadcast(data) {
   });
 }
 
+function broadcastOnline() {
+  broadcast({ type: 'online', payload: { count: onlineCount } });
+}
+
 wss.on('connection', ws => {
+  onlineCount++;
+  broadcastOnline();
+  // 连接后立即推送当前在线人数
+  ws.send(JSON.stringify({ type: 'online', payload: { count: onlineCount } }));
+
+  ws.on('close', () => {
+    onlineCount = Math.max(0, onlineCount - 1);
+    broadcastOnline();
+  });
+
   // 客户端拖拽移动卡片（松手后提交）
   ws.on('message', raw => {
     let data;

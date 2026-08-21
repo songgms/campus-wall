@@ -1,10 +1,35 @@
 {
   "name": "campus-wall",
   "version": "1.0.0",
-  "description": "校园留言墙 - 多人实时协同",
+  "description": "校园留言墙 - 模拟真实白墙，支持多人实时协同、拖拽、点赞、匿名留言",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "stop": "node stop.js",
+    "tunnel": "npx localtunnel --port 3000"
+  },
+  "keywords": [
+    "campus",
+    "wall",
+    "message-board",
+    "websocket",
+    "real-time",
+    "collaboration",
+    "express",
+    "nodejs"
+  ],
+  "author": "songgms",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/songgms/campus-wall.git"
+  },
+  "bugs": {
+    "url": "https://github.com/songgms/campus-wall/issues"
+  },
+  "homepage": "https://github.com/songgms/campus-wall#readme",
+  "engines": {
+    "node": ">=14.0.0"
   },
   "dependencies": {
     "express": "^4.19.2",

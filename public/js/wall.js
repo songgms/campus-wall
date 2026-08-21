@@ -16,6 +16,8 @@
   const submitBtn = document.getElementById('submitBtn');
   const cancelBtn = document.getElementById('cancelBtn');
   const toastEl = document.getElementById('toast');
+  const onlineCountEl = document.getElementById('onlineCount');
+  const searchInput = document.getElementById('searchInput');
 
   const STYLE_NAMES = { plain: '简约方框', rounded: '圆角便签', color: '彩色便签' };
 
@@ -31,6 +33,13 @@
   let messages = [];
   let editingId = null; // 当前正在编辑的留言 id
   let toastTimer = null;
+  let searchKeyword = '';
+
+  // 本地已点赞的留言ID（用户端无法从服务端获取点赞者列表，本地记录）
+  let likedIds = new Set(JSON.parse(localStorage.getItem('wall_liked_ids') || '[]'));
+  function saveLikedIds() {
+    localStorage.setItem('wall_liked_ids', JSON.stringify([...likedIds]));
+  }
 
   // ---- 工具 ----
   function toast(text, isErr) {
@@ -133,6 +142,9 @@
       ? `<span class="card-author">${esc(m.nickname)}</span>`
       : `<span class="card-author">匿名</span>`;
 
+    const liked = likedIds.has(m.id);
+    const likesCount = m.likesCount || 0;
+
     card.innerHTML = `
       ${own ? `<div class="card-actions">
         <button class="edit" title="编辑">✎</button>
@@ -141,6 +153,10 @@
       <div class="card-text">${esc(m.text)}</div>
       <div class="card-meta">
         ${authorHtml}
+        <button class="like-btn ${liked ? 'liked' : ''}" title="${liked ? '取消点赞' : '点赞'}">
+          <span class="like-icon">${liked ? '♥' : '♡'}</span>
+          <span class="like-count">${likesCount}</span>
+        </button>
         <span class="card-time">${timeStr(m.createdAt)}</span>
       </div>
     `;
@@ -151,45 +167,49 @@
       enableDrag(card, m);
     }
 
+    card.querySelector('.like-btn').addEventListener('click', e => { e.stopPropagation(); toggleLike(m.id, card); });
+
     wall.appendChild(card);
     return card;
   }
 
   function renderAll() {
     wall.querySelectorAll('.card').forEach(c => c.remove());
-    messages.forEach(renderCard);
+    const kw = searchKeyword.trim().toLowerCase();
+    const list = kw
+      ? messages.filter(m => m.text.toLowerCase().includes(kw) || (m.nickname && m.nickname.toLowerCase().includes(kw)))
+      : messages;
+    list.forEach(renderCard);
     emptyTip.hidden = messages.length > 0;
+    if (kw && !list.length && messages.length) {
+      emptyTip.textContent = `没有找到包含「${searchKeyword}」的留言`;
+      emptyTip.hidden = false;
+    } else {
+      emptyTip.textContent = '墙上还没有留言，点击右上角「新增留言」写下第一条吧～';
+    }
   }
 
-  // ---- 拖拽（仅自己的卡片）----
+  // ---- 拖拽（仅自己的卡片，支持鼠标和触摸）----
   function enableDrag(card, m) {
-    card.addEventListener('mousedown', e => {
-      if (e.button !== 0) return;
-      if (e.target.closest('.card-actions')) return; // 点编辑/删除按钮不触发拖拽
-
+    function startDrag(clientX, clientY) {
       const rect = wall.getBoundingClientRect();
       const cardW = card.offsetWidth, cardH = card.offsetHeight;
-      // 鼠标在卡片内的偏移
-      const offX = e.clientX - card.getBoundingClientRect().left;
-      const offY = e.clientY - card.getBoundingClientRect().top;
+      const offX = clientX - card.getBoundingClientRect().left;
+      const offY = clientY - card.getBoundingClientRect().top;
 
       card.classList.add('dragging');
 
-      function onMove(ev) {
-        let x = ev.clientX - rect.left - offX;
-        let y = ev.clientY - rect.top - offY;
-        // 边界约束
+      function move(clientX, clientY) {
+        let x = clientX - rect.left - offX;
+        let y = clientY - rect.top - offY;
         x = Math.max(0, Math.min(rect.width - cardW, x));
         y = Math.max(0, Math.min(rect.height - cardH, y));
         card.style.left = (x / rect.width * 100) + '%';
         card.style.top = (y / rect.height * 100) + '%';
       }
 
-      function onUp() {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
+      function end() {
         card.classList.remove('dragging');
-        // 松手后把百分比位置提交给服务端广播
         const x = parseFloat(card.style.left);
         const y = parseFloat(card.style.top);
         const local = messages.find(t => t.id === m.id);
@@ -197,10 +217,43 @@
         sendWS({ type: 'move', payload: { id: m.id, authorId: userId, x, y } });
       }
 
+      return { move, end };
+    }
+
+    // 鼠标拖拽
+    card.addEventListener('mousedown', e => {
+      if (e.button !== 0) return;
+      if (e.target.closest('.card-actions') || e.target.closest('.like-btn')) return;
+      const { move, end } = startDrag(e.clientX, e.clientY);
+      function onMove(ev) { move(ev.clientX, ev.clientY); }
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        end();
+      }
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
       e.preventDefault();
     });
+
+    // 触摸拖拽
+    card.addEventListener('touchstart', e => {
+      if (e.target.closest('.card-actions') || e.target.closest('.like-btn')) return;
+      const touch = e.touches[0];
+      const { move, end } = startDrag(touch.clientX, touch.clientY);
+      function onMove(ev) {
+        const t = ev.touches[0];
+        move(t.clientX, t.clientY);
+        ev.preventDefault();
+      }
+      function onEnd() {
+        document.removeEventListener('touchmove', onMove);
+        document.removeEventListener('touchend', onEnd);
+        end();
+      }
+      document.addEventListener('touchmove', onMove, { passive: false });
+      document.addEventListener('touchend', onEnd);
+    }, { passive: true });
   }
 
   // ---- WebSocket 实时同步 ----
@@ -251,6 +304,18 @@
         case 'config':
           applyConfig(p);
           toast('配置已更新');
+          break;
+        case 'like': {
+          const i = messages.findIndex(m => m.id === p.id);
+          if (i >= 0) {
+            messages[i].likesCount = p.likesCount;
+            const card = wall.querySelector(`[data-id="${p.id}"]`);
+            if (card) card.querySelector('.like-count').textContent = p.likesCount;
+          }
+          break;
+        }
+        case 'online':
+          if (onlineCountEl) onlineCountEl.textContent = p.count;
           break;
       }
     };
@@ -348,6 +413,51 @@
     }
   }
 
+  async function toggleLike(id, cardEl) {
+    const btn = cardEl.querySelector('.like-btn');
+    const iconEl = btn.querySelector('.like-icon');
+    const countEl = btn.querySelector('.like-count');
+    const wasLiked = likedIds.has(id);
+    // 乐观更新
+    if (wasLiked) {
+      likedIds.delete(id);
+      btn.classList.remove('liked');
+      iconEl.textContent = '♡';
+      countEl.textContent = Math.max(0, (parseInt(countEl.textContent) || 0) - 1);
+    } else {
+      likedIds.add(id);
+      btn.classList.add('liked');
+      iconEl.textContent = '♥';
+      countEl.textContent = (parseInt(countEl.textContent) || 0) + 1;
+    }
+    saveLikedIds();
+    try {
+      const res = await fetch(`/api/messages/${id}/like`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ authorId: userId })
+      });
+      if (!res.ok) throw new Error((await res.json()).error || '操作失败');
+      const data = await res.json();
+      countEl.textContent = data.likesCount;
+    } catch (err) {
+      // 回滚
+      if (wasLiked) {
+        likedIds.add(id);
+        btn.classList.add('liked');
+        iconEl.textContent = '♥';
+        countEl.textContent = (parseInt(countEl.textContent) || 0) + 1;
+      } else {
+        likedIds.delete(id);
+        btn.classList.remove('liked');
+        iconEl.textContent = '♡';
+        countEl.textContent = Math.max(0, (parseInt(countEl.textContent) || 0) - 1);
+      }
+      saveLikedIds();
+      toast(err.message, true);
+    }
+  }
+
   async function removeMessage(id) {
     if (!(await customConfirm('确定删除这条留言吗？', '删除', true))) return;
     const res = await fetch(`/api/messages/${id}?authorId=${encodeURIComponent(userId)}`, { method: 'DELETE' });
@@ -366,6 +476,16 @@
   textInput.addEventListener('input', updateCharHint);
   showNameInput.addEventListener('change', () => {
     nicknameInput.disabled = !showNameInput.checked && config.allowAnonymous;
+  });
+  searchInput.addEventListener('input', e => {
+    searchKeyword = e.target.value;
+    renderAll();
+  });
+
+  // 键盘快捷键：ESC 关闭弹窗，Ctrl/Cmd+Enter 提交
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !modal.hidden) closeModal();
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !modal.hidden) submitModal();
   });
 
   // ---- 初始化 ----

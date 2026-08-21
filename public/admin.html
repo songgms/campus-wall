@@ -43,12 +43,15 @@
         <div class="stat-card"><div class="num" id="statToday">0</div><div class="lbl">今日新增</div></div>
         <div class="stat-card"><div class="num" id="statAnon">0</div><div class="lbl">匿名留言数</div></div>
         <div class="stat-card"><div class="num" id="statPercent">0%</div><div class="lbl">匿名占比</div></div>
+        <div class="stat-card"><div class="num" id="statBlocked">0</div><div class="lbl">已屏蔽</div></div>
+        <div class="stat-card"><div class="num" id="statLikes">0</div><div class="lbl">总点赞数</div></div>
       </div>
 
       <div class="panel">
         <h2>留言列表</h2>
         <div class="panel-toolbar">
           <button id="refreshBtn" class="btn btn-sm">刷新</button>
+          <button id="exportBtn" class="btn btn-sm">导出数据</button>
           <span class="spacer"></span>
           <button id="resetPosBtn" class="btn btn-sm">重置全部卡片位置</button>
           <button id="selAllBtn" class="btn btn-sm">全选</button>
@@ -61,6 +64,7 @@
               <th>留言内容</th>
               <th style="width:150px">提交时间</th>
               <th style="width:140px">提交人</th>
+              <th style="width:60px">点赞</th>
               <th style="width:80px">匿名</th>
               <th style="width:170px">操作</th>
             </tr>
@@ -93,6 +97,16 @@
           <span>单条留言字数上限：</span>
           <input id="cfgMaxLen" type="number" min="1" max="2000">
           <span>字</span>
+        </div>
+
+        <div class="switch-row">
+          <input type="checkbox" id="cfgSensitiveFilter">
+          <span>启用敏感词自动过滤（发布/编辑时检测）</span>
+        </div>
+
+        <div class="cfg-num" style="flex-direction:column;align-items:flex-start;gap:6px">
+          <span>敏感词列表（每行一个，发布时命中将被拒绝）：</span>
+          <textarea id="cfgSensitiveWords" rows="4" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;resize:vertical" placeholder="每行一个敏感词，例如：&#10;傻逼&#10;操你"></textarea>
         </div>
 
         <button id="saveCfgBtn" class="btn btn-primary">保存设置</button>

@@ -3,6 +3,7 @@ node_modules/
 
 # 数据文件
 data.json
+backups/
 
 # 操作系统
 .DS_Store

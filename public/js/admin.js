@@ -119,6 +119,8 @@
     $('statToday').textContent = s.today;
     $('statAnon').textContent = s.anonymous;
     $('statPercent').textContent = s.percent + '%';
+    $('statBlocked').textContent = s.blocked || 0;
+    $('statLikes').textContent = s.totalLikes || 0;
   }
 
   async function refreshAll() {
@@ -132,7 +134,7 @@
   // ---- 留言列表 ----
   function renderTable() {
     if (!messages.length) {
-      msgTable.innerHTML = '<tr><td colspan="6" class="empty-row">暂无留言</td></tr>';
+      msgTable.innerHTML = '<tr><td colspan="7" class="empty-row">暂无留言</td></tr>';
       return;
     }
     msgTable.innerHTML = messages.map(m => `
@@ -147,6 +149,7 @@
           <div>${esc(m.nickname || '（未填昵称）')}</div>
           <div class="raw-author">ID: ${esc(m.authorId)}</div>
         </td>
+        <td>♥ ${Array.isArray(m.likes) ? m.likes.length : (m.likesCount || 0)}</td>
         <td>${m.showName
           ? '<span class="tag tag-named">实名</span>'
           : '<span class="tag tag-anon">匿名</span>'}</td>
@@ -222,6 +225,28 @@
 
   $('refreshBtn').addEventListener('click', refreshAll);
 
+  // 导出数据
+  $('exportBtn').addEventListener('click', () => {
+    // 直接打开下载链接（带 token 通过 query 不太安全，改用 fetch + blob）
+    fetch('/api/admin/export', { headers: { 'Authorization': 'Bearer ' + token } })
+      .then(res => {
+        if (!res.ok) throw new Error('导出失败');
+        return res.blob();
+      })
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `campus-wall-export-${Date.now()}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        toast('数据已导出');
+      })
+      .catch(err => toast(err.message, true));
+  });
+
   // ---- 导航 ----
   function switchPage(page) {
     $('pageHome').hidden = page !== 'home';
@@ -243,6 +268,8 @@
         cb.checked = cfg.allowedStyles.includes(cb.value);
       });
       $('cfgMaxLen').value = cfg.maxTextLength;
+      $('cfgSensitiveFilter').checked = cfg.enableSensitiveFilter !== false;
+      $('cfgSensitiveWords').value = (cfg.sensitiveWords || []).join('\n');
     } catch (err) {
       toast(err.message, true);
     }
@@ -252,13 +279,17 @@
     const allowedStyles = [...document.querySelectorAll('.cfg-styles input')]
       .filter(cb => cb.checked).map(cb => cb.value);
     if (!allowedStyles.length) return toast('至少保留一种卡片样式', true);
+    const sensitiveWords = $('cfgSensitiveWords').value
+      .split('\n').map(s => s.trim()).filter(Boolean);
     try {
       await api('/api/admin/config', {
         method: 'PUT',
         body: JSON.stringify({
           allowAnonymous: $('cfgAnonymous').checked,
           allowedStyles,
-          maxTextLength: $('cfgMaxLen').value
+          maxTextLength: $('cfgMaxLen').value,
+          enableSensitiveFilter: $('cfgSensitiveFilter').checked,
+          sensitiveWords
         })
       });
       toast('设置已保存并实时生效');
