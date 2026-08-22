@@ -41,6 +41,15 @@
     localStorage.setItem('wall_liked_ids', JSON.stringify([...likedIds]));
   }
 
+  // 自己留言的编辑令牌 { 留言id: editToken }（服务端仅在发布时返回给作者）
+  let editTokens = JSON.parse(localStorage.getItem('wall_edit_tokens') || '{}');
+  function saveEditTokens() {
+    localStorage.setItem('wall_edit_tokens', JSON.stringify(editTokens));
+  }
+  function getEditToken(id) {
+    return editTokens[id] || null;
+  }
+
   // ---- 工具 ----
   function toast(text, isErr) {
     toastEl.textContent = text;
@@ -120,6 +129,14 @@
   }
 
   // ---- 渲染 ----
+  // 搜索过滤（renderAll 与实时事件共用，保证搜索状态下新卡片同样遵守关键词）
+  function matchesSearch(m) {
+    const kw = searchKeyword.trim().toLowerCase();
+    if (!kw) return true;
+    return m.text.toLowerCase().includes(kw) ||
+      (m.nickname && m.nickname.toLowerCase().includes(kw));
+  }
+
   function renderCard(m) {
     const old = wall.querySelector(`[data-id="${m.id}"]`);
     if (old) old.remove();
@@ -129,7 +146,7 @@
     if (m.style === 'color') card.classList.add('c' + hashNum(m.id) % 5);
     if (m.blocked) card.classList.add('blocked');
 
-    const own = m.authorId === userId;
+    const own = m.own === true; // 服务端按观察者计算的标记（authorId 不再下发）
     if (own) card.classList.add('own');
 
     card.dataset.id = m.id;
@@ -143,9 +160,7 @@
       : `<span class="card-author">匿名</span>`;
 
     const liked = likedIds.has(m.id);
-    const likesCount = m.likesCount || 0;
-
-    card.innerHTML = `
+    const likesCount = m.likesCount || 0;    card.innerHTML = `
       ${own ? `<div class="card-actions">
         <button class="edit" title="编辑">✎</button>
         <button class="del" title="删除">✕</button>
@@ -176,9 +191,7 @@
   function renderAll() {
     wall.querySelectorAll('.card').forEach(c => c.remove());
     const kw = searchKeyword.trim().toLowerCase();
-    const list = kw
-      ? messages.filter(m => m.text.toLowerCase().includes(kw) || (m.nickname && m.nickname.toLowerCase().includes(kw)))
-      : messages;
+    const list = kw ? messages.filter(matchesSearch) : messages;
     list.forEach(renderCard);
     emptyTip.hidden = messages.length > 0;
     if (kw && !list.length && messages.length) {
@@ -214,7 +227,9 @@
         const y = parseFloat(card.style.top);
         const local = messages.find(t => t.id === m.id);
         if (local) { local.x = x; local.y = y; }
-        sendWS({ type: 'move', payload: { id: m.id, authorId: userId, x, y } });
+        const editToken = getEditToken(m.id);
+        if (!editToken) { toast('本地缺少该留言的身份凭证，无法同步位置', true); return; }
+        sendWS({ type: 'move', payload: { id: m.id, editToken, x, y } });
       }
 
       return { move, end };
@@ -262,6 +277,11 @@
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}`);
 
+    ws.onopen = () => {
+      // 上报身份，服务端据此为每条广播计算 own/likedByMe 标记
+      sendWS({ type: 'hello', payload: { userId } });
+    };
+
     ws.onmessage = ev => {
       let data;
       try { data = JSON.parse(ev.data); } catch (e) { return; }
@@ -269,13 +289,17 @@
       switch (data.type) {
         case 'create':
           if (!messages.find(m => m.id === p.id)) messages.push(p);
-          renderCard(p);
-          emptyTip.hidden = messages.length > 0;
+          if (matchesSearch(p)) {
+            renderCard(p);
+            emptyTip.hidden = true; // 墙上已有内容，隐藏空状态提示
+          }
           break;
         case 'update': {
           const i = messages.findIndex(m => m.id === p.id);
           if (i >= 0) messages[i] = p; else messages.push(p);
-          renderCard(p);
+          const card = wall.querySelector(`[data-id="${p.id}"]`);
+          if (matchesSearch(p)) renderCard(p);
+          else if (card) card.remove();
           break;
         }
         case 'move': {
@@ -387,10 +411,12 @@
     submitBtn.disabled = true;
     try {
       if (editingId) {
+        const editToken = getEditToken(editingId);
+        if (!editToken) throw new Error('本地缺少该留言的身份凭证（可能已清理浏览器数据），无法编辑');
         const res = await fetch(`/api/messages/${editingId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, nickname, showName, authorId: userId })
+          body: JSON.stringify({ text, nickname, showName, editToken })
         });
         if (!res.ok) throw new Error((await res.json()).error || '保存失败');
       } else {
@@ -403,6 +429,12 @@
           })
         });
         if (!res.ok) throw new Error((await res.json()).error || '发布失败');
+        // 保存服务端签发的编辑令牌（仅作者本人获得）
+        const created = await res.json();
+        if (created && created.editToken) {
+          editTokens[created.id] = created.editToken;
+          saveEditTokens();
+        }
       }
       closeModal();
       toast(editingId ? '已保存' : '已发布到墙上');
@@ -459,12 +491,16 @@
   }
 
   async function removeMessage(id) {
+    const editToken = getEditToken(id);
+    if (!editToken) return toast('本地缺少该留言的身份凭证（可能已清理浏览器数据），无法删除', true);
     if (!(await customConfirm('确定删除这条留言吗？', '删除', true))) return;
-    const res = await fetch(`/api/messages/${id}?authorId=${encodeURIComponent(userId)}`, { method: 'DELETE' });
+    const res = await fetch(`/api/messages/${id}?editToken=${encodeURIComponent(editToken)}`, { method: 'DELETE' });
     if (!res.ok) {
       toast((await res.json()).error || '删除失败', true);
       return;
     }
+    delete editTokens[id];
+    saveEditTokens();
     toast('已删除');
   }
 
@@ -492,10 +528,14 @@
   (async function init() {
     const [cfgRes, msgRes] = await Promise.all([
       fetch('/api/config'),
-      fetch('/api/messages')
+      // 附带 userId，服务端据此计算 own（是否自己的卡片）和 likedByMe（点赞状态）
+      fetch('/api/messages?userId=' + encodeURIComponent(userId))
     ]);
     applyConfig(await cfgRes.json());
     messages = await msgRes.json();
+    // 以服务端点赞记录为准校准本地状态（浏览器数据被清理后可自愈）
+    likedIds = new Set(messages.filter(m => m.likedByMe).map(m => m.id));
+    saveLikedIds();
     renderAll();
     connectWS();
   })();

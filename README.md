@@ -238,10 +238,10 @@ certbot --nginx -d your-domain.com
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | /api/config | 获取公开配置 |
-| GET | /api/messages | 获取留言列表（公开视图） |
-| POST | /api/messages | 新增留言 |
-| PATCH | /api/messages/:id | 编辑自己的留言 |
-| DELETE | /api/messages/:id | 删除自己的留言 |
+| GET | /api/messages | 获取留言列表（公开视图，可带 `?userId=` 计算自己的卡片标记） |
+| POST | /api/messages | 新增留言（响应中返回仅作者持有的 editToken） |
+| PATCH | /api/messages/:id | 编辑自己的留言（请求体需携带 editToken） |
+| DELETE | /api/messages/:id | 删除自己的留言（查询参数 `?editToken=`） |
 | POST | /api/messages/:id/like | 点赞/取消点赞 |
 
 ### 管理接口（需 Bearer Token）
@@ -294,7 +294,8 @@ certbot --nginx -d your-domain.com
       "style": "plain|rounded|color",
       "x": 0-95,
       "y": 0-90,
-      "authorId": "作者标识",
+      "authorId": "作者标识（仅管理接口可见，不下发给普通用户）",
+      "editToken": "编辑令牌（仅发布响应返回给作者，用于编辑/删除/移动）",
       "nickname": "昵称或null",
       "showName": true,
       "blocked": false,
@@ -307,7 +308,7 @@ certbot --nginx -d your-domain.com
     "allowedStyles": ["plain", "rounded", "color"],
     "maxTextLength": 200,
     "adminUser": "admin",
-    "adminPass": "admin123",
+    "adminPass": "密码的 SHA-256 哈希（登录时哈希比对）",
     "sensitiveWords": ["敏感词列表"],
     "enableSensitiveFilter": true,
     "saveMode": "auto",
@@ -333,8 +334,8 @@ campus-wall/
 │   ├── css/
 │   │   └── style.css  # 样式文件
 │   └── js/
-│       ├── wall.js    # 用户端逻辑
-│       └── admin.js   # 管理端逻辑
+│       ├── wall2.js   # 用户端逻辑
+│       └── admin2.js  # 管理端逻辑
 ├── LICENSE            # 开源协议
 └── README.md
 ```
@@ -382,7 +383,9 @@ localtunnel 默认支持 WebSocket。如果使用其他穿透工具，请确认�
 
 ### Q: 如何修改管理员密码
 
-登录管理后台 → 系统设置 → 修改管理员账号，填写新密码后保存。也可以直接编辑 `data.json` 中的 `config.adminPass` 字段，重启服务生效。
+登录管理后台 → 系统设置 → 修改管理员账号，填写新密码后保存（服务端会自动转为 SHA-256 哈希存储）。
+
+> 注意：`data.json` 中保存的是密码哈希而非明文，直接编辑该字段需自行填入新密码的 SHA-256 哈希值，推荐一律走管理后台修改。
 
 ## 数据保存机制
 
@@ -429,6 +432,14 @@ curl -X POST -H "Authorization: Bearer <token>" http://localhost:3000/api/admin/
 - 敏感词过滤默认开启，可在管理端「系统设置」中关闭或自定义词库
 - 生产环境建议使用反向代理（Nginx）并配置 HTTPS，WebSocket 对应使用 wss 协议
 - 本项目仅供学习和校园内部使用，请遵守相关法律法规，不要用于非法用途
+
+## 安全机制
+
+- **编辑令牌（editToken）**：发布留言时服务端签发仅作者持有的随机令牌，编辑/删除/移动留言必须出示令牌；公开接口不下发 authorId，仅返回按观察者计算的 own 标记，他人无法伪造身份操作你的卡片
+- **管理员密码哈希存储**：密码以 SHA-256 哈希保存在 data.json，登录时哈希比对；首次启动会自动将旧明文密码迁移为哈希
+- **管理会话有效期**：登录 token 有效期 24 小时，过期自动失效需重新登录
+- **数据脱敏**：匿名留言的真实昵称、点赞者列表、编辑令牌均不会下发给普通用户端
+- **静态资源缓存策略**：HTML/JS/CSS 以 no-cache 头下发，发版后客户端立即获取新代码
 
 ## License
 

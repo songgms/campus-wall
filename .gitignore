@@ -5,6 +5,10 @@ node_modules/
 data.json
 backups/
 
+# 环境变量（含 SECRET 等敏感配置）
+.env
+.env.*
+
 # 操作系统
 .DS_Store
 Thumbs.db

@@ -107,6 +107,25 @@ function getSaveStatus() {
   };
 }
 
+// ---------- 启动迁移 ----------
+function sha256(s) {
+  return crypto.createHash('sha256').update(String(s)).digest('hex');
+}
+
+(function migrate() {
+  let changed = false;
+  // 旧留言补发编辑令牌（此前的留言没有令牌，作者将无法再编辑/移动，属安全加固的必要代价）
+  db.messages.forEach(m => {
+    if (!m.editToken) { m.editToken = crypto.randomBytes(16).toString('hex'); changed = true; }
+  });
+  // 管理员密码从明文迁移为 SHA-256 哈希（64位hex = 已是哈希，跳过）
+  if (db.config.adminPass && !/^[0-9a-f]{64}$/.test(db.config.adminPass)) {
+    db.config.adminPass = sha256(db.config.adminPass);
+    changed = true;
+  }
+  if (changed) writeToDisk();
+})();
+
 // ---------- 工具 ----------
 function genId() {
   return Date.now().toString(36) + crypto.randomBytes(4).toString('hex');
@@ -126,6 +145,8 @@ function sign(payload) {
   return crypto.createHmac('sha256', SECRET).update(payload).digest('hex');
 }
 
+const TOKEN_TTL = 24 * 3600 * 1000; // 管理 token 有效期 24 小时
+
 function makeToken() {
   const payload = 'admin:' + Date.now();
   return payload + '.' + sign(payload);
@@ -137,6 +158,9 @@ function verifyToken(token) {
   if (idx < 0) return false;
   const payload = token.slice(0, idx);
   const sig = token.slice(idx + 1);
+  if (!payload.startsWith('admin:')) return false;
+  const ts = Number(payload.slice(6));
+  if (!ts || Date.now() - ts > TOKEN_TTL) return false; // 过期即失效
   try {
     return crypto.timingSafeEqual(Buffer.from(sign(payload)), Buffer.from(sig));
   } catch (e) {
@@ -151,30 +175,36 @@ function requireAdmin(req, res, next) {
 }
 
 // 面向普通用户的留言（屏蔽的隐藏内容；匿名的隐藏真实昵称）
-function publicMessage(m) {
+// 不下发 authorId / editToken：是否为"自己的卡片"由服务端按观察者计算 own 标记，
+// 编辑/删除/移动必须出示只有作者持有的 editToken
+function publicMessage(m, viewerId) {
   const copy = Object.assign({}, m);
   if (copy.blocked) copy.text = '【该内容已被管理员屏蔽】';
   if (!copy.showName) copy.nickname = null;
   copy.likesCount = Array.isArray(m.likes) ? m.likes.length : 0;
-  delete copy.likes; // 不暴露点赞者ID列表
+  copy.likedByMe = !!viewerId && Array.isArray(m.likes) && m.likes.includes(viewerId);
+  copy.own = !!viewerId && m.authorId === viewerId;
+  delete copy.likes;
+  delete copy.authorId;
+  delete copy.editToken;
   return copy;
 }
 
 // ---------- HTTP 服务 ----------
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// 页面与脚本禁止长缓存：每次请求都向服务器校验新鲜度，保证发版后所有客户端立即拿到新代码
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: true,
+  setHeaders: (res, filePath) => {
+    if (/\.(html|js|css)$/.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
+  }
+}));
 
-// 全局错误处理
-app.use((err, req, res, next) => {
-  console.error('[服务器错误]', err);
-  res.status(500).json({ error: '服务器内部错误，请稍后重试' });
-});
-
-// 登录
+// 登录（密码以 SHA-256 哈希比对）
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
-  if (username === db.config.adminUser && password === db.config.adminPass) {
+  if (username === db.config.adminUser && sha256(password || '') === db.config.adminPass) {
     res.json({ ok: true, token: makeToken() });
   } else {
     res.status(401).json({ error: '账号或密码错误' });
@@ -187,9 +217,10 @@ app.get('/api/config', (req, res) => {
   res.json({ allowAnonymous, allowedStyles, maxTextLength });
 });
 
-// 公开留言列表（用户端初始加载）
+// 公开留言列表（用户端初始加载，按观察者计算 own/likedByMe）
 app.get('/api/messages', (req, res) => {
-  res.json(db.messages.map(publicMessage));
+  const viewer = String(req.query.userId || '');
+  res.json(db.messages.map(m => publicMessage(m, viewer)));
 });
 
 // 新增留言
@@ -218,6 +249,7 @@ app.post('/api/messages', (req, res) => {
     x: typeof x === 'number' ? x : Math.random() * 70 + 5,
     y: typeof y === 'number' ? y : Math.random() * 70 + 8,
     authorId: authorId || genId(),
+    editToken: crypto.randomBytes(16).toString('hex'), // 仅返回给作者本人
     nickname: nickname || null,
     showName: !!showName,
     blocked: false,
@@ -226,18 +258,18 @@ app.post('/api/messages', (req, res) => {
   };
   db.messages.push(msg);
   save();
-  broadcast({ type: 'create', payload: publicMessage(msg) });
-  res.json(msg);
+  broadcastSmart('create', msg);
+  res.json(msg); // 原样返回给作者（含 editToken，客户端需保存）
 });
 
-// 编辑自己的留言
+// 编辑自己的留言（需出示该留言的 editToken）
 app.patch('/api/messages/:id', (req, res) => {
   const msg = db.messages.find(m => m.id === req.params.id);
   if (!msg) return res.status(404).json({ error: '留言不存在' });
-  if (msg.authorId !== (req.body || {}).authorId) {
-    return res.status(403).json({ error: '只能编辑自己的留言' });
+  const { text, style, nickname, showName, editToken } = req.body || {};
+  if (!editToken || editToken !== msg.editToken) {
+    return res.status(403).json({ error: '身份校验失败，只能编辑自己的留言' });
   }
-  const { text, style, nickname, showName } = req.body;
   if (text !== undefined) {
     if (!text.trim()) return res.status(400).json({ error: '留言内容不能为空' });
     if (text.trim().length > db.config.maxTextLength) {
@@ -253,16 +285,16 @@ app.patch('/api/messages/:id', (req, res) => {
   if (nickname !== undefined) msg.nickname = nickname || null;
   if (showName !== undefined) msg.showName = !!showName;
   save();
-  broadcast({ type: 'update', payload: publicMessage(msg) });
-  res.json(msg);
+  broadcastSmart('update', msg);
+  res.json(publicMessage(msg, msg.authorId));
 });
 
-// 删除自己的留言
+// 删除自己的留言（需出示该留言的 editToken）
 app.delete('/api/messages/:id', (req, res) => {
   const idx = db.messages.findIndex(m => m.id === req.params.id);
   if (idx < 0) return res.status(404).json({ error: '留言不存在' });
-  if (db.messages[idx].authorId !== req.query.authorId) {
-    return res.status(403).json({ error: '只能删除自己的留言' });
+  if (req.query.editToken !== db.messages[idx].editToken) {
+    return res.status(403).json({ error: '身份校验失败，只能删除自己的留言' });
   }
   const [removed] = db.messages.splice(idx, 1);
   save();
@@ -320,7 +352,7 @@ app.patch('/api/admin/messages/:id', requireAdmin, (req, res) => {
   if (!msg) return res.status(404).json({ error: '留言不存在' });
   if ((req.body || {}).blocked !== undefined) msg.blocked = !!req.body.blocked;
   save();
-  broadcast({ type: 'update', payload: publicMessage(msg) });
+  broadcastSmart('update', msg);
   res.json(msg);
 });
 
@@ -331,13 +363,14 @@ app.post('/api/admin/reset-positions', requireAdmin, (req, res) => {
     m.y = Math.random() * 70 + 8;
   });
   save();
-  broadcast({ type: 'reset', payload: db.messages.map(publicMessage) });
+  broadcastSmart('reset', db.messages);
   res.json({ ok: true });
 });
 
-// 配置管理
+// 配置管理（不返回密码哈希）
 app.get('/api/admin/config', requireAdmin, (req, res) => {
-  res.json(db.config);
+  const { adminPass, ...safeConfig } = db.config;
+  res.json(safeConfig);
 });
 
 app.put('/api/admin/config', requireAdmin, (req, res) => {
@@ -348,7 +381,7 @@ app.put('/api/admin/config', requireAdmin, (req, res) => {
   if (body.allowAnonymous !== undefined) updates.allowAnonymous = !!body.allowAnonymous;
   if (body.enableSensitiveFilter !== undefined) updates.enableSensitiveFilter = !!body.enableSensitiveFilter;
   if (body.adminUser && body.adminUser.trim()) updates.adminUser = body.adminUser.trim();
-  if (body.adminPass && body.adminPass.trim()) updates.adminPass = body.adminPass.trim();
+  if (body.adminPass && body.adminPass.trim()) updates.adminPass = sha256(body.adminPass); // 落库前哈希
 
   // —— 需要验证的字段：任何一个失败都直接 return，不修改任何配置 ——
   if (body.allowedStyles !== undefined) {
@@ -450,6 +483,12 @@ app.get('/api/admin/stats', requireAdmin, (req, res) => {
   res.json({ total, today, anonymous, blocked, totalLikes, percent: total ? Math.round(anonymous / total * 100) : 0 });
 });
 
+// 全局错误处理（Express 4 要求错误中间件注册在所有路由之后才能捕获路由/解析错误）
+app.use((err, req, res, next) => {
+  console.error('[服务器错误]', err);
+  res.status(500).json({ error: '服务器内部错误，请稍后重试' });
+});
+
 // ---------- WebSocket ----------
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -458,6 +497,17 @@ function broadcast(data) {
   const str = JSON.stringify(data);
   wss.clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) client.send(str);
+  });
+}
+
+// 携带 own/likedByMe 标记的广播：每个连接按其上报的 userId 定制 payload
+function broadcastSmart(type, msgs) {
+  const list = Array.isArray(msgs) ? msgs : [msgs];
+  wss.clients.forEach(client => {
+    if (client.readyState !== WebSocket.OPEN) return;
+    const viewer = client.userId || '';
+    const payload = list.map(m => publicMessage(m, viewer));
+    client.send(JSON.stringify({ type, payload: Array.isArray(msgs) ? payload : payload[0] }));
   });
 }
 
@@ -476,13 +526,20 @@ wss.on('connection', ws => {
     broadcastOnline();
   });
 
-  // 客户端拖拽移动卡片（松手后提交）
+  // 客户端拖拽移动卡片（松手后提交，需出示 editToken）
   ws.on('message', raw => {
     let data;
     try { data = JSON.parse(raw); } catch (e) { return; }
+    if (data.type === 'hello') {
+      // 客户端上报身份，用于广播时计算 own/likedByMe 标记
+      const uid = data.payload && data.payload.userId;
+      if (typeof uid === 'string' && uid.length <= 64) ws.userId = uid;
+      return;
+    }
     if (data.type === 'move') {
       const msg = db.messages.find(m => m.id === data.payload.id);
-      if (!msg || msg.authorId !== data.payload.authorId) return; // 只能移动自己的卡片
+      if (!msg) return;
+      if (!data.payload.editToken || data.payload.editToken !== msg.editToken) return; // 只能移动自己的卡片
       msg.x = Math.max(0, Math.min(95, +data.payload.x || 0));
       msg.y = Math.max(0, Math.min(90, +data.payload.y || 0));
       save();
@@ -505,6 +562,15 @@ function gracefulShutdown() {
 }
 process.on('SIGINT', gracefulShutdown);
 process.on('SIGTERM', gracefulShutdown);
+// 兜底：任何正常退出路径（含未捕获异常）都尽力把未落盘的变更写回磁盘
+process.on('exit', () => {
+  if (dirty) { try { writeToDisk(); } catch (e) { /* 退出阶段无法再处理 */ } }
+});
+process.on('uncaughtException', err => {
+  console.error('[未捕获异常]', err);
+  try { if (dirty) writeToDisk(); } catch (e) {}
+  process.exit(1); // 触发 exit 钩子再兜底一次
+});
 
 server.listen(PORT, () => {
   console.log(`校园留言墙已启动: http://localhost:${PORT}`);
